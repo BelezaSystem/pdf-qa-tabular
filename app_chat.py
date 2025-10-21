@@ -13,16 +13,21 @@ from main import responder, CAMINHO_DB
 load_dotenv()
 
 
-def build_stack(use_local_embeddings: bool, no_llm: bool):
+def build_stack(use_openai_embeddings: bool, no_llm: bool):
     api_key = os.environ.get("OPENAI_API_KEY")
 
-    # Embeddings (sempre locais por padrão para compatibilidade com DB criado)
-    if use_local_embeddings or not api_key:
+    # Embeddings: local por padrão; OpenAI somente se flag + API key
+    if use_openai_embeddings:
+        if api_key:
+            embeddings = OpenAIEmbeddings()
+            print("Usando embeddings OpenAI - dimensão 1536")
+        else:
+            print("OPENAI_API_KEY não encontrado; fallback para embeddings locais (FastEmbed).")
+            embeddings = FastEmbedEmbeddings()
+            print("Usando embeddings locais (FastEmbed) - dimensão 384")
+    else:
         embeddings = FastEmbedEmbeddings()
         print("Usando embeddings locais (FastEmbed) - dimensão 384")
-    else:
-        embeddings = OpenAIEmbeddings()
-        print("Usando embeddings OpenAI - dimensão 1536")
 
     db = Chroma(persist_directory=CAMINHO_DB, embedding_function=embeddings)
     modelo = None if no_llm else ChatOpenAI(temperature=0)
@@ -44,12 +49,12 @@ def make_chat_handler(db, modelo):
 
 def main():
     parser = argparse.ArgumentParser(description="Chat web para QA sobre PDFs")
-    parser.add_argument("--local-embeddings", action="store_true", help="Usa embeddings locais (FastEmbed)")
+    parser.add_argument("--openai-embeddings", action="store_true", help="Usa embeddings OpenAI (1536). Por padrão usa FastEmbed (384)")
     parser.add_argument("--no-llm", action="store_true", help="Não utilizar LLM; respostas por recuperação/extrator")
     parser.add_argument("--port", type=int, default=7860, help="Porta do servidor (default: 7860)")
     args = parser.parse_args()
 
-    db, modelo = build_stack(use_local_embeddings=args.local_embeddings, no_llm=args.no_llm)
+    db, modelo = build_stack(use_openai_embeddings=args.openai_embeddings, no_llm=args.no_llm)
     handler = make_chat_handler(db, modelo)
 
     demo = gr.ChatInterface(

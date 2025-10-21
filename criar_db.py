@@ -83,8 +83,17 @@ def db_existe():
 
 def carregar_documentos():
     try:
+        # Listagem explícita dos PDFs na pasta base (para diagnóstico)
+        pdfs = [p for p in os.listdir(PASTA_BASE) if p.lower().endswith(".pdf")]
+        print(f"PDFs na base: {len(pdfs)} -> {pdfs}")
         carregador = PyPDFDirectoryLoader(PASTA_BASE, glob="*.pdf")
         documentos = carregador.load()
+        # Contagem por arquivo de origem
+        src_counts = {}
+        for d in documentos:
+            src = d.metadata.get("source") or d.metadata.get("file_path") or "(desconhecido)"
+            src_counts[src] = src_counts.get(src, 0) + 1
+        print(f"Documentos carregados: {len(documentos)}; por arquivo: {src_counts}")
         return documentos
     except Exception as e:
         print(f"Erro ao carregar documentos: {e}")
@@ -137,7 +146,8 @@ def _doc_from_text(texto: str, pdf_path: str, page_ix: int, t_ix: int, r_ix: int
         "atividade": atividade,
         "atividade_norm": normalizar(atividade),
         "tokens": " ".join(tokens(atividade)),
-        "tokens_stemmed": " ".join(tokens_stemmed(atividade)),
+                    "tokens_stemmed": " ".join(tokens_stemmed(atividade)),
+                    "has_estetic": ("estetic" in tokens_stemmed(atividade)),
         "classificacao": classif.upper() if classif else None,
         "classificacao_norm": classif,
         "anexo": ("ANEXO " + anexo) if anexo else None,
@@ -150,12 +160,14 @@ def _doc_from_text(texto: str, pdf_path: str, page_ix: int, t_ix: int, r_ix: int
 def carregar_documentos_tabulares(base_dir: str, normalize: bool = True) -> List[Document]:
     docs: List[Document] = []
     pdfs = [os.path.join(base_dir, p) for p in os.listdir(base_dir) if p.lower().endswith(".pdf")]
+    print(f"[TABULAR] PDFs encontrados: {len(pdfs)} -> {[os.path.basename(p) for p in pdfs]}")
     if not pdfs:
         return docs
 
     for pdf_path in pdfs:
         try:
             with pdfplumber.open(pdf_path) as pdf:
+                print(f"[TABULAR] Processando: {os.path.basename(pdf_path)} (paginas={len(pdf.pages)})")
                 for page_ix, page in enumerate(pdf.pages, start=1):
                     # 1) Tentar extrair tabelas estruturadas
                     tables = page.extract_tables() or []
@@ -172,7 +184,6 @@ def carregar_documentos_tabulares(base_dir: str, normalize: bool = True) -> List
                         linha = linha.strip()
                         if not linha:
                             continue
-                        # filtrar linhas muito curtas e sem pistas de tabela
                         ln_norm = normalizar(linha)
                         if len(linha) < 12 and "anexo" not in ln_norm:
                             continue
@@ -181,6 +192,7 @@ def carregar_documentos_tabulares(base_dir: str, normalize: bool = True) -> List
                             docs.append(d)
         except Exception as e:
             print(f"Falha ao processar '{pdf_path}': {e}")
+    print(f"[TABULAR] Total de linhas/documentos extraídos: {len(docs)}")
     return docs
 
 

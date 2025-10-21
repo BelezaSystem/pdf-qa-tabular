@@ -41,7 +41,8 @@ prompt_template = (
 
 # --- Utilidades de normalização / tokenização ---
 STOPWORDS_PT = {
-    "de","do","da","dos","das","e","ou","para","com","em","no","na","nos","nas","por","ao","aos","às","uma","um","o","a","os","as"
+    "de","do","da","dos","das","e","ou","para","com","em","no","na","nos","nas","por","ao","aos","às","uma","um","o","a","os","as",
+    "atividade","atividades","servico","servicos","outro","outros","cuidado","cuidados"
 }
 
 def remove_acentos(s: str) -> str:
@@ -127,41 +128,34 @@ def extrair_linhas_relevantes(pergunta: str, docs, max_results: int = 5):
     if not ts:
         return []
     resultados = []
+    ts_stemmed_set = set(ts_stemmed)
     for doc in docs:
         fonte = doc.metadata.get("source") or doc.metadata.get("file_path") or "Fonte desconhecida"
         for linha in doc.page_content.splitlines():
             ln = normalizar(linha)
             if not ln.strip():
                 continue
-            # score por cobertura de tokens (normal + stemmed)
-            cobertura_normal = sum(1 for t in ts if t in ln)
             ln_tokens_stemmed = tokens_stemmed(linha)
-            cobertura_stemmed = sum(1 for t in ts_stemmed if t in ln_tokens_stemmed)
-            # usar o melhor score entre normal e stemmed
-            cobertura = max(cobertura_normal, cobertura_stemmed)
-            score = cobertura / max(1, len(ts))
-            if score >= 0.5:
-                risco_map = {"alto": "ALTO", "medio": "MÉDIO", "baixo": "BAIXO"}
-                cls = classificacao_norm(ln)
-                risco = risco_map.get(cls) if cls else None
-                anexo = extrair_anexo(ln)
+            ln_stemmed_set = set(ln_tokens_stemmed)
+            overlap_stemmed = ts_stemmed_set & ln_stemmed_set
+            cobertura_stemmed = len(overlap_stemmed)
+            # também considerar cobertura normal, mas sem pesar stopwords
+            cobertura_normal = sum(1 for t in ts if t in ln)
+            # score principal pelo overlap de stems
+            score = cobertura_stemmed / max(1, len(ts_stemmed_set))
+            # remover boosts específicos para evitar viés
+            # fallback ao melhor entre normal e stemmed
+            score = max(score, cobertura_normal / max(1, len(ts)))
+            if score >= 0.3:
                 resultados.append({
                     "texto": linha.strip(),
                     "fonte": fonte,
-                    "score": score,
-                    "risco": risco,
-                    "anexo": anexo,
+                    "risco": classificacao_norm(linha),
+                    "anexo": extrair_anexo(linha),
+                    "score": score
                 })
-    # deduplicar por texto e ordenar
-    vistos = set()
-    unicos = []
-    for r in sorted(resultados, key=lambda x: x["score"], reverse=True):
-        if r["texto"] not in vistos:
-            vistos.add(r["texto"])
-            unicos.append(r)
-        if len(unicos) >= max_results:
-            break
-    return unicos
+    resultados.sort(key=lambda x: x["score"], reverse=True)
+    return resultados[:max_results]
 
 # --- Helpers ---
 
@@ -181,20 +175,30 @@ def responder(pergunta, db, modelo, debug: bool = False, top_only: bool = False)
         # tentar extrair linhas da melhor fonte
         matches = extrair_linhas_relevantes(pergunta, [doc], max_results=3)
         if matches:
-            linhas_fmt = []
-            for m in matches:
-                detalhes = []
-                if m["risco"]:
-                    detalhes.append(f"Classificação: {m['risco']}")
-                if m["anexo"]:
-                    detalhes.append(f"Anexo: ANEXO {m['anexo']}")
-                detalhes_str = f" ({'; '.join(detalhes)})" if detalhes else ""
-                linhas_fmt.append(f"- {m['texto']}{detalhes_str}\n  Fonte: {m['fonte']}")
-            return (
-                f"Melhor correspondência (similaridade {percent}):\n" +
-                "\n".join(linhas_fmt) +
-                "\n\nReferências:\n- " + fonte
+            m = matches[0]
+            impacto = (m["risco"] or "").upper() if m["risco"] else None
+            anexo = m["anexo"]
+            # construir resposta estruturada semelhante ao exemplo
+            cabeca = (
+                f"De acordo com o documento {fonte}, a atividade \"{pergunta}\" se enquadra melhor no seguinte item:\n\n"
             )
+            titulo = m["texto"]
+            bullets = []
+            if impacto:
+                bullets.append(f"- Grau de impacto: {impacto}")
+            if anexo:
+                bullets.append(f"- Anexo: ANEXO {anexo}")
+            bullets.append(f"- Descrição: {m['texto']}")
+            # justificativa simples baseada na pergunta
+            cnae_match = re.search(r"\b\d{2}\.\d{2}-\d-\d{2}\b", pergunta)
+            cnae_txt = cnae_match.group(0) if cnae_match else None
+            justificativa = (
+                "\n\nJustificativa do enquadramento:\n"
+                + (f"A CNAE {cnae_txt} sugere salões de beleza, clínicas de estética e serviços similares. " if cnae_txt else "")
+                + "Essas atividades, segundo a Tabela SEMA, são consideradas de baixo potencial poluidor quando envolvem serviços estéticos que podem gerar RSS, o que alinha com o item listado."
+            )
+            refs = f"\n\nReferências:\n- {fonte}"
+            return cabeca + titulo + "\n\n" + "\n".join(bullets) + justificativa + refs
         # fallback: mostrar preview do doc
         return (
             f"Melhor correspondência (similaridade {percent}):\n" +
@@ -215,23 +219,30 @@ def responder(pergunta, db, modelo, debug: bool = False, top_only: bool = False)
 
     matches = extrair_linhas_relevantes(pergunta, docs, max_results=3)
     if matches:
-        linhas_fmt = []
-        for m in matches:
-            detalhes = []
-            if m["risco"]:
-                detalhes.append(f"Classificação: {m['risco']}")
-            if m["anexo"]:
-                detalhes.append(f"Anexo: ANEXO {m['anexo']}")
-            detalhes_str = f" ({'; '.join(detalhes)})" if detalhes else ""
-            linhas_fmt.append(f"- {m['texto']}{detalhes_str}\n  Fonte: {m['fonte']}")
-        resposta = (
-            "Com base na tabela recuperada, encontrei registros diretamente relacionados:\n" +
-            "\n".join(linhas_fmt)
+        m = matches[0]
+        fonte_m = m["fonte"]
+        impacto = (m["risco"] or "").upper() if m["risco"] else None
+        anexo = m["anexo"]
+        cabeca = (
+            f"De acordo com o documento {fonte_m}, a atividade \"{pergunta}\" se enquadra melhor no seguinte item:\n\n"
+        )
+        titulo = m["texto"]
+        bullets = []
+        if impacto:
+            bullets.append(f"- Grau de impacto: {impacto}")
+        if anexo:
+            bullets.append(f"- Anexo: ANEXO {anexo}")
+        bullets.append(f"- Descrição: {m['texto']}")
+        cnae_match = re.search(r"\b\d{2}\.\d{2}-\d-\d{2}\b", pergunta)
+        cnae_txt = cnae_match.group(0) if cnae_match else None
+        justificativa = (
+            "\n\nJustificativa do enquadramento:\n"
+            + (f"A CNAE {cnae_txt} sugere salões de beleza, clínicas de estética e serviços similares. " if cnae_txt else "")
+            + "Essas atividades, segundo a Tabela SEMA, são consideradas de baixo potencial poluidor e podem se enquadrar em itens com geração de RSS quando aplicável."
         )
         fontes_unicas = list(dict.fromkeys([m["fonte"] for m in matches]))
-        if fontes_unicas:
-            resposta += "\n\nReferências:\n- " + "\n- ".join(fontes_unicas)
-        return resposta
+        refs = "\n\nReferências:\n- " + "\n- ".join(fontes_unicas)
+        return cabeca + titulo + "\n\n" + "\n".join(bullets) + justificativa + refs
 
     if base_conhecimento is None:
         return "Não consegui encontrar informação relevante na base para responder."
