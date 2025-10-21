@@ -17,4 +17,6 @@ dependencies = [
   "langchain-text-splitters>=0.2.0",
   "pdfplumber>=0.10.0",
   "fastembed>=0.2.0",
+  "gradio>=4.0.0",
+    "nltk>=3.8",
 ]

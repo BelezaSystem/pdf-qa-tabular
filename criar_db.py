@@ -12,9 +12,10 @@ from langchain_chroma.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_core.documents import Document
-
 # Modo tabular
 import pdfplumber
+# Utilitários compartilhados do main
+from main import remove_acentos, normalizar, tokens, tokens_stemmed, classificacao_norm, extrair_anexo
 
 load_dotenv()
 
@@ -22,22 +23,7 @@ PASTA_BASE = "base"
 DB_DIR = "db"
 ROWS_INDEX = os.path.join(DB_DIR, "rows.json")
 
-# --- Normalização ---
-STOPWORDS_PT = {
-    "de","do","da","dos","das","e","ou","para","com","em","no","na","nos","nas","por","ao","aos","às","uma","um","o","a","os","as"
-}
-
-
-def remove_acentos(s: str) -> str:
-    return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
-
-
-def normalizar(s: str) -> str:
-    return remove_acentos(s).lower()
-
-
-def tokens(s: str):
-    return [t for t in re.findall(r"\w+", normalizar(s)) if len(t) > 2 and t not in STOPWORDS_PT]
+# --- Normalização --- (utilizando utilitários do main.py)
 
 
 # --- Criação do DB ---
@@ -132,21 +118,7 @@ def vetorizar_chunks(chunks, use_local_embeddings: bool = False):
 
 # --- Modo Tabular ---
 
-def _classificacao_norm(s: str):
-    s = normalizar(s)
-    if "alto" in s:
-        return "alto"
-    if "medio" in s:
-        return "medio"
-    if "baixo" in s:
-        return "baixo"
-    return None
-
-
-def _extrair_anexo(s: str):
-    s = normalizar(s)
-    m = re.search(r"anexo\s+([ivxlcdm]+)", s)
-    return m.group(1).upper() if m else None
+# Helpers específicos removidos: usar main.classificacao_norm e main.extrair_anexo
 
 
 def _doc_from_text(texto: str, pdf_path: str, page_ix: int, t_ix: int, r_ix: int, normalize: bool) -> Document:
@@ -155,8 +127,8 @@ def _doc_from_text(texto: str, pdf_path: str, page_ix: int, t_ix: int, r_ix: int
     texto_proc = remove_acentos(texto) if normalize else texto
     # Heurística: primeira célula/descrição
     atividade = texto.split("|")[0].strip() if "|" in texto else texto.strip()
-    classif = _classificacao_norm(texto)
-    anexo = _extrair_anexo(texto)
+    classif = classificacao_norm(texto)
+    anexo = extrair_anexo(texto)
     meta = {
         "source": os.path.relpath(pdf_path),
         "page": page_ix,
@@ -164,6 +136,8 @@ def _doc_from_text(texto: str, pdf_path: str, page_ix: int, t_ix: int, r_ix: int
         "row_index": r_ix,
         "atividade": atividade,
         "atividade_norm": normalizar(atividade),
+        "tokens": " ".join(tokens(atividade)),
+        "tokens_stemmed": " ".join(tokens_stemmed(atividade)),
         "classificacao": classif.upper() if classif else None,
         "classificacao_norm": classif,
         "anexo": ("ANEXO " + anexo) if anexo else None,

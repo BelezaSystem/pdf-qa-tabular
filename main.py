@@ -3,6 +3,8 @@ import argparse
 import re
 import unicodedata
 from dotenv import load_dotenv
+import nltk
+from nltk.stem import RSLPStemmer
 from langchain_chroma.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.embeddings import FastEmbedEmbeddings
@@ -10,6 +12,18 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 load_dotenv()
+
+# Inicializar stemmer português
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt', quiet=True)
+try:
+    nltk.data.find('corpora/rslp')
+except LookupError:
+    nltk.download('rslp', quiet=True)
+
+stemmer = RSLPStemmer()
 
 CAMINHO_DB = "db"
 SCORE_THRESHOLD = 0.4
@@ -38,6 +52,27 @@ def normalizar(s: str) -> str:
 
 def tokens(s: str):
     return [t for t in re.findall(r"\w+", normalizar(s)) if len(t) > 2 and t not in STOPWORDS_PT]
+
+def tokens_stemmed(s: str):
+    """Tokenização com stemming para normalizar singular/plural"""
+    base_tokens = tokens(s)
+    return [stemmer.stem(t) for t in base_tokens]
+
+# --- Helpers de classificação/anexo reutilizáveis ---
+def classificacao_norm(s: str):
+    s = normalizar(s)
+    if "alto" in s:
+        return "alto"
+    if "medio" in s:
+        return "medio"
+    if "baixo" in s:
+        return "baixo"
+    return None
+
+def extrair_anexo(s: str):
+    s = normalizar(s)
+    m = re.search(r"anexo\s+([ivxlcdm]+)", s)
+    return m.group(1).upper() if m else None
 
 # --- Recuperação ---
 
@@ -88,6 +123,7 @@ def construir_base_conhecimento(docs):
 
 def extrair_linhas_relevantes(pergunta: str, docs, max_results: int = 5):
     ts = tokens(pergunta)
+    ts_stemmed = tokens_stemmed(pergunta)
     if not ts:
         return []
     resultados = []
@@ -97,19 +133,18 @@ def extrair_linhas_relevantes(pergunta: str, docs, max_results: int = 5):
             ln = normalizar(linha)
             if not ln.strip():
                 continue
-            # score por cobertura de tokens
-            cobertura = sum(1 for t in ts if t in ln)
+            # score por cobertura de tokens (normal + stemmed)
+            cobertura_normal = sum(1 for t in ts if t in ln)
+            ln_tokens_stemmed = tokens_stemmed(linha)
+            cobertura_stemmed = sum(1 for t in ts_stemmed if t in ln_tokens_stemmed)
+            # usar o melhor score entre normal e stemmed
+            cobertura = max(cobertura_normal, cobertura_stemmed)
             score = cobertura / max(1, len(ts))
             if score >= 0.5:
-                risco = None
-                if "alto" in ln:
-                    risco = "ALTO"
-                elif "medio" in ln:
-                    risco = "MÉDIO"
-                elif "baixo" in ln:
-                    risco = "BAIXO"
-                m = re.search(r"anexo\s+([ivxlcdm]+)", ln)
-                anexo = m.group(1).upper() if m else None
+                risco_map = {"alto": "ALTO", "medio": "MÉDIO", "baixo": "BAIXO"}
+                cls = classificacao_norm(ln)
+                risco = risco_map.get(cls) if cls else None
+                anexo = extrair_anexo(ln)
                 resultados.append({
                     "texto": linha.strip(),
                     "fonte": fonte,
