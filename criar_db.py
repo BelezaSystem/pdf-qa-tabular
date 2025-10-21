@@ -10,6 +10,7 @@ from langchain_community.document_loaders import PyPDFDirectoryLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings
+from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_core.documents import Document
 
 # Modo tabular
@@ -41,7 +42,7 @@ def tokens(s: str):
 
 # --- Criação do DB ---
 
-def criar_db(chunk_size: int = 800, chunk_overlap: int = 150, force: bool = False, tabular: bool = False, normalize: bool = True):
+def criar_db(chunk_size: int = 800, chunk_overlap: int = 150, force: bool = False, tabular: bool = False, normalize: bool = True, local_embeddings: bool = False):
     if force and os.path.isdir(DB_DIR):
         shutil.rmtree(DB_DIR, ignore_errors=True)
         print(f"Removido diretório de base existente: {DB_DIR}")
@@ -72,7 +73,7 @@ def criar_db(chunk_size: int = 800, chunk_overlap: int = 150, force: bool = Fals
             print("Falha ao dividir documentos em chunks.")
             return
 
-    vetorizar_chunks(chunks)
+    vetorizar_chunks(chunks, use_local_embeddings=local_embeddings)
 
     # Persistir índice auxiliar se modo tabular
     if tabular:
@@ -116,9 +117,9 @@ def dividir_chunks(documentos, chunk_size: int, chunk_overlap: int):
     return chunks
 
 
-def vetorizar_chunks(chunks):
+def vetorizar_chunks(chunks, use_local_embeddings: bool = False):
     try:
-        embeddings = OpenAIEmbeddings()
+        embeddings = FastEmbedEmbeddings() if use_local_embeddings else OpenAIEmbeddings()
         Chroma.from_documents(
             chunks,
             embeddings,
@@ -216,6 +217,7 @@ def main():
     parser.add_argument("--chunk-overlap", type=int, default=150, help="Sobreposição dos chunks (default: 150)")
     parser.add_argument("--tabular", action="store_true", help="Extrai linhas de tabelas com pdfplumber e indexa cada linha como documento")
     parser.add_argument("--no-normalize", action="store_true", help="Não aplicar normalização de texto (acentos) no modo tabular")
+    parser.add_argument("--local-embeddings", action="store_true", help="Usa embeddings locais (FastEmbed) em vez de OpenAI")
     args = parser.parse_args()
 
     criar_db(
@@ -224,6 +226,7 @@ def main():
         force=args.force,
         tabular=args.tabular,
         normalize=not args.no_normalize,
+        local_embeddings=args.local_embeddings,
     )
 
 

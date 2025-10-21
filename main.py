@@ -5,6 +5,7 @@ import unicodedata
 from dotenv import load_dotenv
 from langchain_chroma.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
@@ -200,6 +201,18 @@ def responder(pergunta, db, modelo, debug: bool = False, top_only: bool = False)
     if base_conhecimento is None:
         return "Não consegui encontrar informação relevante na base para responder."
 
+    # Modo sem LLM: compõe resposta a partir das prévias recuperadas
+    if modelo is None:
+        previews = []
+        for d in docs[:3]:
+            fonte = d.metadata.get("source") or d.metadata.get("file_path") or "Fonte desconhecida"
+            previews.append(f"- Fonte: {fonte}\n  Preview: {_format_snippet(d.page_content)}")
+        resposta = "Prévia dos documentos mais relevantes:\n" + "\n".join(previews)
+        fontes_unicas = list(dict.fromkeys(fontes))
+        if fontes_unicas:
+            resposta += "\n\nReferências:\n- " + "\n- ".join(fontes_unicas)
+        return resposta
+
     prompt = ChatPromptTemplate.from_template(prompt_template)
     chain = prompt | modelo | StrOutputParser()
     texto_resposta = chain.invoke({"pergunta": pergunta, "base_conhecimento": base_conhecimento})
@@ -215,16 +228,28 @@ def main():
     parser = argparse.ArgumentParser(description="Assistente de QA sobre PDFs")
     parser.add_argument("--debug", action="store_true", help="Imprime logs de recuperação e prévias dos documentos")
     parser.add_argument("--top-only", action="store_true", help="Retorna apenas a melhor correspondência com porcentagem de similaridade")
+    parser.add_argument("--local-embeddings", action="store_true", help="Usa embeddings locais (FastEmbed) em vez de OpenAI")
+    parser.add_argument("--no-llm", action="store_true", help="Não usar LLM; resposta só com recuperação/extrator")
     args = parser.parse_args()
 
     api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        print("OPENAI_API_KEY não encontrado no ambiente. Configure seu .env.")
-        return
 
-    embeddings = OpenAIEmbeddings()
+    # Seleção de embeddings (OpenAI ou locais)
+    if args.local_embeddings:
+        embeddings = FastEmbedEmbeddings()
+    else:
+        if not api_key:
+            print("OPENAI_API_KEY não encontrado; usando embeddings locais (FastEmbed).")
+            embeddings = FastEmbedEmbeddings()
+        else:
+            embeddings = OpenAIEmbeddings()
+
     db = Chroma(persist_directory=CAMINHO_DB, embedding_function=embeddings)
-    modelo = ChatOpenAI(temperature=0)
+
+    # Seleção de LLM (ou modo sem LLM)
+    modelo = None if args.no_llm else ChatOpenAI(temperature=0)
+    if modelo is None and not args.no_llm:
+        print("Aviso: sem OPENAI_API_KEY, o modo LLM não está disponível. Use --no-llm para operar sem LLM.")
 
     print("Digite sua pergunta (ou 'sair' para encerrar).")
     while True:
