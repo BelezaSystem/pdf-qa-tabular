@@ -1,0 +1,19 @@
+[project]
+name = "langchain-qa"
+version = "0.1.0"
+description = "QA sobre PDFs usando LangChain + ChromaDB"
+requires-python = ">=3.10"
+
+# Dependências gerenciadas pelo uv
+dependencies = [
+  "python-dotenv>=1.0.1",
+  "langchain>=0.2.0",
+  "langchain-openai>=0.1.0",
+  "langchain-community>=0.2.0",
+  "langchain-chroma>=0.1.0",
+  "chromadb>=0.5.3",
+  "openai>=1.35.0",
+  "pypdf>=4.0.0",
+  "langchain-text-splitters>=0.2.0",
+  "pdfplumber>=0.10.0",
+]
